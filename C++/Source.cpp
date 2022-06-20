@@ -14,32 +14,80 @@ int sgn(T val)
 {
 	return (T(0) < val) - (val < T(0));
 }
+Vec3b rgb2lms(Vec3b frame)
+{
+	int r = (int)frame[2];
+	int g = (int)frame[1];
+	int b = (int)frame[0];
+	float l = (4.11935 * b) + (43.5161 * g) + (17.8824 * r);
+	float m = (3.8671 * b) + (27.1554 * g) + (3.4556 * r);
+	float s = (1.4670 * b) + (0.1843 * g) + (0.0299 * r);
+	return Vec3b(l, m, s);
+}
+Vec3b rgb2hsv(Vec3b frame)
+{
+	int r = (int)(frame[2]);
+	int g = (int)(frame[1]);
+	int b = (int)(frame[0]);
+	int maxR = max(max(r, g), b);
+	int minR = min(min(r, g), b);
+
+	float h;
+	float s = maxR != minR ? (maxR - minR) / maxR : 0;
+	float v = (r + g + b) / 3;
+	if (maxR != minR)
+	{
+		if (maxR == r) // red
+		{
+			h = 60 * ((g - b) / (maxR - minR));
+		}
+		else if (maxR == g) // green
+		{
+			h = 60 * ((b - r) / (maxR - minR)) + 120;
+		}
+		else // blue
+		{
+			h = 60 * ((r - g) / (maxR - minR)) + 240;
+		}
+	}
+	else
+	{
+		h = 0;
+	}
+
+	return Vec3b(h, s, v);
+}
 
 int main(int argc, char *argv[])
 {
-	// int filter[width][height][3] = { 0 };
-	// int filteredImg[width][height][3] = { 0 };
-	// int integralImg[width][height][3] = { 0 };
-	// std::unique_ptr<int[][height][3]> filter{std::make_unique<int[][height][3]>(width)};
-	// std::unique_ptr<int[][height][3]> filteredImg{ std::make_unique<int[][height][3]>(width) };
-	// std::unique_ptr<int[][height][3]> integralImg{ std::make_unique<int[][height][3]>(width) };
-	// int sz[] = { width, height, 3 };
-	// Mat filter(3, sz, CV_64FC3, Scalar::all(255));
-	// Mat filteredImg(3, sz, CV_64FC3, Scalar::all(0));
-	// Mat integralImg(3, sz, CV_64FC3, Scalar::all(0));
-	VideoCapture cap(2); //, CAP_DSHOW);
+	/*
+	int filter[width][height][3] = { 0 };
+	int filteredImg[width][height][3] = { 0 };
+	int integralImg[width][height][3] = { 0 };
+	std::unique_ptr<int[][height][3]> filter{std::make_unique<int[][height][3]>(width)};
+	std::unique_ptr<int[][height][3]> filteredImg{ std::make_unique<int[][height][3]>(width) };
+	std::unique_ptr<int[][height][3]> integralImg{ std::make_unique<int[][height][3]>(width) };
+	int sz[] = { width, height, 3 };
+	Mat filter(3, sz, CV_64FC3, Scalar::all(255));
+	Mat filteredImg(3, sz, CV_64FC3, Scalar::all(0));
+	Mat integralImg(3, sz, CV_64FC3, Scalar::all(0));
+	*/
+	VideoCapture cap(0); //, CAP_DSHOW);
 
 	double dWidth = cap.get(CAP_PROP_FRAME_WIDTH);
 	double dHeight = cap.get(CAP_PROP_FRAME_HEIGHT);
 	const int r = 1;
 	const int width = dWidth / r;
 	const int height = dHeight / r;
-	double a = 0.5;
-	double l = 0.3;
+	double a = 2;	// stepness activation function
+	double l = 0.1; // time constant
+	int mode = 0;
 
 	Mat filter(height, width, CV_32FC3, Scalar::all(255));
 	Mat integralImg(height, width, CV_8UC3, Scalar::all(0));
 	Mat filteredImg(height, width, CV_8UC3, Scalar::all(0));
+	Mat hsvImage(height, width, CV_8UC3, Scalar::all(0));
+	Mat lmsImage(height, width, CV_8UC3, Scalar::all(0));
 
 	int lut[255];
 	for (int i = 0; i < 255; i++)
@@ -65,6 +113,7 @@ int main(int argc, char *argv[])
 	namedWindow(window_name);
 	VideoWriter original("original.avi", cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), 10, Size(width, height));
 	VideoWriter illusion("illusion.avi", cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), 10, Size(width, height));
+
 	while (true)
 	{
 		Mat frame;
@@ -102,18 +151,47 @@ int main(int argc, char *argv[])
 			Vec3b *ptrIntegralImg = integralImg.ptr<Vec3b>(r);
 			Vec3f *ptrFilter = filter.ptr<Vec3f>(r);
 			Vec3b *ptrFilteredImg = filteredImg.ptr<Vec3b>(r);
+			Vec3b *ptrHSVImage = hsvImage.ptr<Vec3b>(r);
+			Vec3b *ptrLMSImage = lmsImage.ptr<Vec3b>(r);
 
 			for (int c = 0; c < frame.cols; c++)
 			{
-				float maxR = max(max((float)ptrIntegralImg[c][0], (float)ptrIntegralImg[c][1]), (float)ptrIntegralImg[c][2]);
-				float minR = min(min((float)ptrIntegralImg[c][0], (float)ptrIntegralImg[c][1]), (float)ptrIntegralImg[c][2]);
-				float s = maxR != minR ? (maxR - minR) / maxR : 0;
+				ptrLMSImage[c] = rgb2lms(ptrFrame[c]);
+				ptrHSVImage[c] = rgb2hsv(ptrFrame[c]);
+				float factor, maxF;
 
-				for (int k = 0; k < 3; k++)
+				switch (mode)
 				{
-					ptrIntegralImg[c][k] = ((ptrIntegralImg[c][k] + (l * ptrFrame[c][k])) / (1 + l));
-					ptrFilter[c][k] = ((ptrFilter[c][k] + s * lut[int(ptrIntegralImg[c][k] * s)]) / (1 + s));
-					ptrFilteredImg[c][k] = ptrFrame[c][k] * ptrFilter[c][k] / 255.0;
+				case 0:
+					for (int k = 0; k < 3; k++)
+					{
+						ptrIntegralImg[c][k] = ((ptrIntegralImg[c][k] + (l * ptrFrame[c][k])) / (1 + l));
+						ptrFilter[c][k] = ((ptrFilter[c][k] + ptrHSVImage[c][1] * lut[int(ptrIntegralImg[c][k] * ptrHSVImage[c][1])]) / (1 + ptrHSVImage[c][1]));
+						ptrFilteredImg[c][k] = ptrFrame[c][k] * ptrFilter[c][k] / 255.0;
+					}
+
+					maxF = max(max((float)ptrFilteredImg[c][0], (float)ptrFilteredImg[c][1]), (float)ptrFilteredImg[c][2]);
+					factor = ptrHSVImage[c][2] / maxF;
+					for (int k = 0; k < 3; k++)
+					{
+						ptrFilteredImg[c][k] = ptrFilteredImg[c][k] * factor;
+					}
+					break;
+				case 1:
+					for (int k = 0; k < 3; k++)
+					{
+						ptrIntegralImg[c][k] = ((ptrIntegralImg[c][k] + (l * ptrLMSImage[c][k])) / (1 + l));
+						ptrFilter[c][k] = ((ptrFilter[c][k] + ptrHSVImage[c][1] * lut[int(ptrIntegralImg[c][k] * ptrHSVImage[c][1])]) / (1 + ptrHSVImage[c][1]));
+						ptrFilteredImg[c][k] = ptrLMSImage[c][k] * ptrFilter[c][k] / 255.0;
+					}
+
+					maxF = max(max((float)ptrFilteredImg[c][0], (float)ptrFilteredImg[c][1]), (float)ptrFilteredImg[c][2]);
+					factor = ptrHSVImage[c][2] / maxF;
+					for (int k = 0; k < 3; k++)
+					{
+						ptrFilteredImg[c][k] = ptrFilteredImg[c][k] * factor;
+					}
+					break;
 				}
 			}
 		}
@@ -129,7 +207,7 @@ int main(int argc, char *argv[])
 		hconcat(frame, filteredImg, displayh);
 		// hconcat(filter, integralImg, displayh2);
 		// vconcat(displayh, displayh2, display);
-		imshow(window_name, displayh);
+		imshow(window_name, filteredImg);
 		original.write(frame);
 		illusion.write(filteredImg);
 
